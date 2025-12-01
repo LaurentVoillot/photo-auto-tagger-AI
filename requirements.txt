@@ -1,0 +1,14 @@
+# Photo Auto Tagger - Requirements
+
+# Core dependencies
+Pillow>=10.0.0          # Image processing
+requests>=2.31.0        # HTTP client for Ollama API
+
+# XML/XMP processing
+lxml>=4.9.0            # XML parsing and creation
+
+# Optional but recommended
+python-dateutil>=2.8.2  # Date handling for XMP metadata
+
+# Note: tkinter is included with Python standard library
+# Note: sqlite3 is included with Python standard library

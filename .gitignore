@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+photo_tagger.log
+
+# Lightroom
+*.lrcat
+*.lrcat-journal
+*.lrdata/
+
+# State files
+photo_tagger_state.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Fichiers de test
+test_*.py
+test_*.jpg
+test_*.png
+test_*.dng
+check_*.py
+verify_*.py
+analyze_*.py
+diagnostic_*.py
+diagnose_*.py
+
+# Archives
+*.zip
