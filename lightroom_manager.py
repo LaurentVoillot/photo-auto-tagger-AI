@@ -119,10 +119,14 @@ class LightroomManager:
             self.conn = None
             logger.info("Connexion catalogue fermée")
     
-    def get_photos_list(self) -> List[Dict]:
+    def get_photos_list(self, offset: int = 0, limit: int = None) -> List[Dict]:
         """
         Récupère la liste des photos du catalogue avec Smart Previews.
         Compatible avec Lightroom Classic v12 à v15.
+        
+        Args:
+            offset: Nombre de photos à ignorer au début (pour reprise)
+            limit: Nombre maximum de photos à récupérer (None = toutes)
         
         Returns:
             Liste de dictionnaires contenant les infos des photos
@@ -150,6 +154,16 @@ class LightroomManager:
             ORDER BY ai.id_local
             """
             
+            # Ajouter LIMIT et OFFSET pour performance
+            # IMPORTANT: SQL requiert LIMIT avant OFFSET
+            if limit is not None:
+                query += f" LIMIT {limit}"
+                if offset > 0:
+                    query += f" OFFSET {offset}"
+            elif offset > 0:
+                # OFFSET sans LIMIT nécessite LIMIT -1 (illimité) en SQLite
+                query += f" LIMIT -1 OFFSET {offset}"
+            
             cursor.execute(query)
             rows = cursor.fetchall()
             
@@ -171,13 +185,38 @@ class LightroomManager:
                     'full_path': full_path
                 })
             
-            logger.info(f"{len(photos)} photos trouvées dans le catalogue")
+            if offset > 0:
+                logger.info(f"{len(photos)} photos trouvées dans le catalogue (à partir de {offset})")
+            else:
+                logger.info(f"{len(photos)} photos trouvées dans le catalogue")
             return photos
             
         except sqlite3.Error as e:
             logger.error(f"Erreur récupération liste photos: {e}")
             # Essayer une requête alternative pour versions plus anciennes
             return self._get_photos_list_fallback()
+    
+    def get_photos_count(self) -> int:
+        """
+        Compte le nombre total de photos dans le catalogue.
+        Utile pour la reprise avec OFFSET.
+        
+        Returns:
+            Nombre total de photos
+        """
+        if not self.conn:
+            logger.error("Pas de connexion au catalogue")
+            return 0
+        
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT COUNT(DISTINCT id_local) FROM Adobe_images WHERE id_local IS NOT NULL")
+            count = cursor.fetchone()[0]
+            logger.debug(f"Nombre total de photos: {count}")
+            return count
+        except sqlite3.Error as e:
+            logger.error(f"Erreur comptage photos: {e}")
+            return 0
     
     def _get_photos_list_fallback(self) -> List[Dict]:
         """

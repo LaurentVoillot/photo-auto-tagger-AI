@@ -152,7 +152,7 @@ photo-auto-tagger/
 
 ### Fichiers XMP
 - Les XMP sont créés automatiquement s'ils n'existent pas
-- Format compatible avec : Lightroom, Bridge, Photoshop, DxO, etc.
+- Format compatible avec : Lightroom, Bridge, Photoshop, etc.
 - Les tags existants sont préservés (ajout, pas remplacement)
 
 ## ⚡ Optimisation des performances

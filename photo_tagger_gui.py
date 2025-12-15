@@ -220,7 +220,8 @@ class PhotoTaggerGUI:
         suffix_frame = ttk.Frame(frame)
         suffix_frame.grid(row=1, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
         
-        self.tag_suffix_enabled = tk.BooleanVar(value=config.TAG_SUFFIX_ENABLED)
+        # Suffixe DÉCOCHÉ par défaut (False en dur)
+        self.tag_suffix_enabled = tk.BooleanVar(value=False)
         suffix_check = ttk.Checkbutton(
             suffix_frame,
             text="Ajouter un suffixe aux tags automatiques",
@@ -372,15 +373,6 @@ class PhotoTaggerGUI:
         )
         self.resume_btn.pack(side=tk.LEFT, padx=5)
         
-        self.stop_btn = ttk.Button(
-            btn_frame,
-            text="⏹️ STOP",
-            command=self._stop_processing,
-            state=tk.DISABLED,
-            style="Stop.TButton"
-        )
-        self.stop_btn.pack(side=tk.LEFT, padx=5)
-        
         # Barre de progression
         progress_frame = ttk.Frame(frame)
         progress_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=20)
@@ -434,7 +426,6 @@ class PhotoTaggerGUI:
         style.configure("Start.TButton", foreground="green")
         style.configure("Resume.TButton", foreground="blue")
         style.configure("Pause.TButton", foreground="orange")
-        style.configure("Stop.TButton", foreground="red")
     
     # ===== Méthodes de gestion des événements =====
     
@@ -607,7 +598,6 @@ class PhotoTaggerGUI:
         self.start_btn.config(state=tk.DISABLED)
         self.resume_btn.config(state=tk.DISABLED)
         self.pause_btn.config(state=tk.NORMAL)
-        self.stop_btn.config(state=tk.NORMAL)
         
         # Réinitialiser les compteurs
         self.is_processing = True
@@ -655,22 +645,16 @@ class PhotoTaggerGUI:
         
         messagebox.showinfo("Reprise disponible", message)
     
-    def _stop_processing(self):
-        """Arrête le traitement en cours."""
-        if messagebox.askyesno("Confirmation", "Arrêter le traitement en cours ?\n\nL'état ne sera pas sauvegardé."):
-            self.should_stop = True
-            # Supprimer l'état sauvegardé s'il existe
-            if os.path.exists(self.state_file):
-                try:
-                    os.remove(self.state_file)
-                    logger.info("État sauvegardé supprimé")
-                except:
-                    pass
-            logger.info("Arrêt demandé par l'utilisateur")
     
     def _pause_processing(self):
         """Met en pause le traitement et sauvegarde l'état."""
-        if messagebox.askyesno("Pause", "Mettre en pause le traitement ?\n\nL'état sera sauvegardé pour reprendre ultérieurement."):
+        if messagebox.askyesno(
+            "Pause", 
+            "Mettre en pause le traitement ?\n\n"
+            "✅ L'état sera sauvegardé\n"
+            "✅ Vous pourrez reprendre plus tard avec RESUME\n"
+            "✅ Ou démarrer un nouveau traitement avec START"
+        ):
             self.should_pause = True
             logger.info("Pause demandée par l'utilisateur")
     
@@ -712,7 +696,6 @@ class PhotoTaggerGUI:
         self.start_btn.config(state=tk.DISABLED)
         self.resume_btn.config(state=tk.DISABLED)
         self.pause_btn.config(state=tk.NORMAL)
-        self.stop_btn.config(state=tk.NORMAL)
         
         # Réinitialiser les flags
         self.is_processing = True
@@ -723,7 +706,7 @@ class PhotoTaggerGUI:
         self.processing_thread = threading.Thread(target=self._process_photos)
         self.processing_thread.start()
         
-        logger.info(f"Reprise du traitement à partir de la photo {self.current_photo}/{self.total_photos}")
+        logger.info(f"▶️ Reprise: photo {self.current_photo}/{self.total_photos}")
         logger.info(f"Configuration restaurée : modèle={model}, source={state.get('source_mode')}")
     
     def _save_state(self):
@@ -741,6 +724,8 @@ class PhotoTaggerGUI:
             'write_to_xmp': self.write_to_xmp.get(),
             'tagging_mode': self.tagging_mode.get(),
             'mappings': self.mappings,
+            'tag_suffix_enabled': self.tag_suffix_enabled.get(),
+            'tag_suffix': self.tag_suffix_var.get(),
             'current_photo': self.current_photo,
             'total_photos': self.total_photos,
             'photos_analyzed': self.photos_analyzed,
@@ -788,6 +773,12 @@ class PhotoTaggerGUI:
         self.mapping_tree.delete(*self.mapping_tree.get_children())
         for criteria, tag in self.mappings:
             self.mapping_tree.insert("", tk.END, values=(criteria, tag))
+        
+        # Restaurer le suffixe (avec compatibilité anciennes versions)
+        if 'tag_suffix_enabled' in state:
+            self.tag_suffix_enabled.set(state['tag_suffix_enabled'])
+        if 'tag_suffix' in state:
+            self.tag_suffix_var.set(state['tag_suffix'])
         
         # Restaurer la progression
         self.current_photo = state['current_photo']
@@ -875,16 +866,34 @@ class PhotoTaggerGUI:
                 self._show_error("Aucune photo à traiter")
                 return
             
-            self.total_photos = len(photos)
-            logger.info(f"{self.total_photos} photos à traiter")
+            # Calculer le nombre total et l'offset de départ
+            mode = self.source_mode.get()
+            if mode == "catalog":
+                # En mode catalogue, toujours récupérer le vrai total
+                total_in_catalog = self.lightroom_manager.get_photos_count()
+                
+                if self.current_photo > 0:
+                    # Mode reprise
+                    offset_start = self.current_photo
+                    logger.info(f"Reprise: {len(photos)} photos restantes sur {total_in_catalog} total (offset: {offset_start})")
+                else:
+                    # Début normal
+                    offset_start = 0
+                    logger.info(f"{total_in_catalog} photos à traiter")
+                
+                self.total_photos = total_in_catalog  # Total absolu actuel
+            else:
+                # Mode dossier
+                offset_start = 0
+                self.total_photos = len(photos) if self.current_photo == 0 else self.current_photo + len(photos)
+                logger.info(f"{self.total_photos} photos à traiter")
             
             # Traiter chaque photo
+            # Note: Si reprise, photos contient déjà les photos restantes (OFFSET SQL)
             for i, photo in enumerate(photos):
-                # Reprendre depuis la photo sauvegardée si c'est une reprise
-                if self.current_photo > 0 and i < self.current_photo:
-                    # Mettre à jour la progression même si on ignore cette photo
-                    self._update_progress()
-                    continue
+                # Calculer l'index absolu pour la progression
+                absolute_index = offset_start + i + 1
+                self.current_photo = absolute_index
                 
                 if self.should_stop:
                     logger.info("Traitement arrêté par l'utilisateur")
@@ -910,7 +919,6 @@ class PhotoTaggerGUI:
                     )
                     return
                 
-                self.current_photo = i + 1
                 self._update_progress()
                 
                 try:
@@ -960,6 +968,7 @@ class PhotoTaggerGUI:
     def _get_photos_to_process(self) -> List:
         """
         Récupère la liste des photos à traiter.
+        Utilise OFFSET SQL pour reprise rapide.
         
         Returns:
             Liste de photos (format dépend du mode)
@@ -972,7 +981,17 @@ class PhotoTaggerGUI:
             if not self.lightroom_manager.connect(catalog_path):
                 raise Exception("Impossible de se connecter au catalogue")
             
-            photos = self.lightroom_manager.get_photos_list()
+            # Si reprise, utiliser OFFSET pour sauter directement aux photos non traitées
+            if self.current_photo > 0:
+                logger.info(f"Reprise à la photo {self.current_photo}, utilisation de OFFSET SQL")
+                photos = self.lightroom_manager.get_photos_list(offset=self.current_photo)
+                if not photos:
+                    logger.error(f"OFFSET {self.current_photo} ne retourne aucune photo!")
+                else:
+                    logger.info(f"{len(photos)} photos récupérées avec OFFSET {self.current_photo}")
+            else:
+                photos = self.lightroom_manager.get_photos_list()
+            
             return photos
             
         else:  # folder
@@ -987,6 +1006,10 @@ class PhotoTaggerGUI:
                     if ext in supported_formats:
                         full_path = os.path.join(root, file)
                         photos.append({'full_path': full_path, 'filename': file})
+            
+            # Si reprise en mode folder, garder l'ancien comportement
+            if self.current_photo > 0:
+                photos = photos[self.current_photo:]
             
             return photos
     
@@ -1006,10 +1029,8 @@ class PhotoTaggerGUI:
                 
                 # Récupérer le chemin complet pour les logs
                 photo_path = self.lightroom_manager.get_photo_path(photo_id)
-                if photo_path:
-                    logger.info(f"Traitement photo ID {photo_id}: {photo.get('filename', 'N/A')} [{photo_path}]")
-                else:
-                    logger.info(f"Traitement photo ID {photo_id}: {photo.get('filename', 'N/A')} [chemin inconnu]")
+                filename = photo.get('filename', 'N/A')
+                logger.debug(f"Début traitement: {filename}")
                 
                 # Essayer Smart Preview puis Preview standard
                 image = self.lightroom_manager.get_smart_preview(photo_id)
@@ -1065,7 +1086,8 @@ class PhotoTaggerGUI:
             
             else:  # folder
                 photo_path = photo['full_path']
-                logger.info(f"Traitement photo: {photo['filename']} [{photo_path}]")
+                filename = photo['filename']
+                logger.debug(f"Début traitement: {filename}")
                 image = Image.open(photo_path)
             
             if image is None:
@@ -1073,36 +1095,60 @@ class PhotoTaggerGUI:
                 return
             
             # Afficher la taille de l'image pour debug
-            logger.info(f"Image chargée: {image.size} pixels, mode: {image.mode}")
+            logger.debug(f"Image chargée: {image.size} pixels, mode: {image.mode}")
             
             # Incrémenter le compteur de photos analysées
             self.photos_analyzed += 1
             
             # Générer les tags avec gestion d'erreur
             try:
-                tags = self._generate_tags_for_image(image)
+                tags, raw_response = self._generate_tags_for_image(image)
             except Exception as e:
                 logger.error(f"Erreur génération tags: {e}", exc_info=True)
                 tags = []
+                raw_response = ""
             
             if not tags:
+                # Aucun tag détecté - logger la réponse brute d'Ollama pour debug
                 if mode == "catalog":
-                    photo_path = self.lightroom_manager.get_photo_path(photo['photo_id'])
-                    logger.warning(f"Aucun tag généré pour photo ID {photo['photo_id']}: {photo.get('filename', 'N/A')} [{photo_path or 'chemin inconnu'}]")
+                    filename = photo.get('filename', 'N/A')
                 else:
-                    logger.warning(f"Aucun tag généré pour: {photo.get('filename', photo)} [{photo.get('full_path', 'N/A')}]")
+                    filename = photo.get('filename', 'N/A')
+                
+                logger.warning(f"❌ Aucun tag détecté: {filename}")
+                if raw_response:
+                    logger.warning(f"📝 Réponse brute Ollama (extraction tags):\n{raw_response}")
+                    
+                    # Test supplémentaire : demander une description simple
+                    logger.warning(f"🔬 Test avec prompt simple 'Détaille la photo'...")
+                    try:
+                        test_tags, test_response = self.ollama_client.test_simple_description(
+                            image, 
+                            self.selected_model.get()
+                        )
+                        logger.warning(f"📝 Réponse test 'détaille la photo':\n{test_response}")
+                        if test_tags:
+                            logger.warning(f"✓ Le modèle peut décrire l'image ! Tags extraits du test: {test_tags}")
+                            logger.warning(f"→ Problème probable: format de réponse non reconnu pour le prompt principal")
+                        else:
+                            logger.warning(f"✗ Le modèle ne peut pas décrire cette image")
+                            logger.warning(f"→ Problème probable: modèle inadapté ou image corrompue")
+                    except Exception as e:
+                        logger.warning(f"✗ Erreur lors du test simple: {e}")
+                else:
+                    logger.warning(f"📝 Aucune réponse d'Ollama (mode ciblé ou erreur)")
                 # Continuer quand même pour la photo suivante
                 return
             
-            # Log avec chemin complet
+            # Log simplifié - retiré, remplacé par log unique final
             if mode == "catalog":
-                photo_path = self.lightroom_manager.get_photo_path(photo['photo_id'])
-                logger.info(f"Tags générés pour {photo.get('filename', 'N/A')} [{photo_path or 'chemin inconnu'}]: {tags}")
+                filename = photo.get('filename', 'N/A')
             else:
-                logger.info(f"Tags générés pour {photo.get('filename', 'N/A')} [{photo.get('full_path', 'N/A')}]: {tags}")
+                filename = photo.get('filename', 'N/A')
             
             # Variable pour suivre si au moins un tag a été écrit
             tags_written = False
+            write_locations = []  # Pour le log final
             
             # Écrire les tags
             try:
@@ -1111,13 +1157,12 @@ class PhotoTaggerGUI:
                     if self.write_to_catalog.get():
                         success = self.lightroom_manager.add_tags(photo_id, tags)
                         if success:
-                            photo_path = self.lightroom_manager.get_photo_path(photo_id)
-                            logger.info(f"Tags écrits dans le catalogue pour photo {photo_id} [{photo_path or 'chemin inconnu'}]: {', '.join(tags)}")
                             self.stats_tags_written_catalog += 1
                             tags_written = True
+                            write_locations.append("catalogue")
                         else:
                             photo_path = self.lightroom_manager.get_photo_path(photo_id)
-                            logger.error(f"Échec écriture catalogue pour photo {photo_id} [{photo_path or 'chemin inconnu'}]")
+                            logger.error(f"Échec écriture catalogue: {filename}")
                     
                     # Écrire dans XMP uniquement si la photo originale existe
                     if self.write_to_xmp.get():
@@ -1127,40 +1172,39 @@ class PhotoTaggerGUI:
                             # Photo originale accessible
                             success = self.xmp_manager.write_tags(photo_path, tags)
                             if success:
-                                logger.info(f"Tags écrits dans XMP: {photo_path}")
                                 self.stats_tags_written_xmp += 1
                                 tags_written = True
+                                write_locations.append("XMP")
                             else:
-                                logger.error(f"Échec écriture XMP pour: {photo_path}")
+                                logger.error(f"Échec écriture XMP: {filename}")
                         elif photo_path:
                             # Photo dans le catalogue mais fichier absent
                             self.stats_xmp_skipped_no_file += 1
-                            logger.warning(
-                                f"Photo originale introuvable, XMP non créé: {photo_path}\n"
-                                f"  → La photo est dans le catalogue mais le fichier n'est pas accessible.\n"
-                                f"  → Vérifiez que le disque/dossier contenant les photos est monté."
-                            )
+                            logger.debug(f"Photo originale introuvable, XMP non créé: {photo_path}")
                         else:
                             # Impossible de déterminer le chemin
                             self.stats_xmp_skipped_no_file += 1
-                            logger.error(
-                                f"Impossible de déterminer le chemin pour photo {photo_id}\n"
-                                f"  → XMP non créé car chemin de la photo introuvable dans le catalogue."
-                            )
+                            logger.debug(f"Impossible de déterminer le chemin pour photo {photo_id}")
                 
                 else:  # folder
                     # Écrire uniquement dans XMP
                     if self.write_to_xmp.get():
                         success = self.xmp_manager.write_tags(photo['full_path'], tags)
                         if success:
-                            logger.info(f"Tags écrits dans XMP: {photo['full_path']}")
                             self.stats_tags_written_xmp += 1
                             tags_written = True
+                            write_locations.append("XMP")
                         else:
-                            logger.error(f"Échec écriture XMP pour: {photo['full_path']}")
+                            logger.error(f"Échec écriture XMP: {filename}")
             
             except Exception as e:
                 logger.error(f"Erreur écriture tags: {e}", exc_info=True)
+            
+            # LOG UNIQUE sur UNE LIGNE avec filename et tags
+            if tags_written:
+                locations_str = "+".join(write_locations)
+                tags_str = ", ".join(tags)
+                logger.info(f"✓ {filename} → [{locations_str}] {tags_str}")
             
             # Incrémenter le compteur de photos taguées si au moins un tag a été écrit
             if tags_written:
@@ -1169,7 +1213,7 @@ class PhotoTaggerGUI:
         except Exception as e:
             logger.error(f"Erreur traitement photo {photo}: {e}", exc_info=True)
     
-    def _generate_tags_for_image(self, image: Image.Image) -> List[str]:
+    def _generate_tags_for_image(self, image: Image.Image) -> tuple[List[str], str]:
         """
         Génère les tags pour une image selon le mode sélectionné.
         Ajoute automatiquement le suffixe configuré (ex: "_ai").
@@ -1178,16 +1222,17 @@ class PhotoTaggerGUI:
             image: Image PIL
             
         Returns:
-            Liste de tags (avec suffixe si activé)
+            Tuple (liste de tags avec suffixe, réponse brute d'Ollama)
         """
         from tag_suffix import apply_suffix_to_tags
         
         model = self.selected_model.get()
         mode = self.tagging_mode.get()
+        raw_response = ""
         
         if mode == "auto":
-            # Mode automatique
-            tags = self.ollama_client.generate_tags_auto(image, model)
+            # Mode automatique - récupérer aussi la réponse brute
+            tags, raw_response = self.ollama_client.generate_tags_auto(image, model, return_raw=True)
         
         else:  # targeted
             # Mode ciblé
@@ -1204,15 +1249,15 @@ class PhotoTaggerGUI:
             suffix = self.tag_suffix_var.get()
             if suffix:  # Seulement si le suffixe n'est pas vide
                 tags_with_suffix = apply_suffix_to_tags(tags, suffix=suffix, enabled=True)
-                logger.info(f"Suffixe '{suffix}' ajouté: {tags} → {tags_with_suffix}")
+                logger.debug(f"Suffixe '{suffix}' ajouté: {tags} → {tags_with_suffix}")
             else:
                 tags_with_suffix = tags
-                logger.info(f"Suffixe vide, tags originaux conservés: {tags}")
+                logger.debug(f"Suffixe vide, tags originaux conservés: {tags}")
         else:
             tags_with_suffix = tags
-            logger.info(f"Suffixe désactivé, tags originaux conservés: {tags}")
+            logger.debug(f"Suffixe désactivé, tags originaux conservés: {tags}")
         
-        return tags_with_suffix
+        return tags_with_suffix, raw_response
     
     # ===== Méthodes UI =====
     
@@ -1236,7 +1281,6 @@ class PhotoTaggerGUI:
         self.should_pause = False
         self.start_btn.config(state=tk.NORMAL)
         self.pause_btn.config(state=tk.DISABLED)
-        self.stop_btn.config(state=tk.DISABLED)
         
         # Activer Resume seulement s'il y a un état sauvegardé
         if os.path.exists(self.state_file):

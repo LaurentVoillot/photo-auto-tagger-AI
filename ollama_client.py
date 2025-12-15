@@ -103,21 +103,43 @@ class OllamaClient:
         logger.debug(f"Taille image encodée: {len(img_bytes)} octets")
         return base64.b64encode(img_bytes).decode('utf-8')
     
-    def generate_tags_auto(self, image: Image.Image, model: str) -> List[str]:
+    def generate_tags_auto(self, image: Image.Image, model: str, return_raw: bool = False):
         """
         Génère des tags descriptifs automatiques pour une image.
         
         Args:
             image: Image PIL à analyser
             model: Nom du modèle Ollama à utiliser
+            return_raw: Si True, retourne aussi la réponse brute d'Ollama
             
         Returns:
-            Liste de tags générés
+            Si return_raw=False: Liste de tags générés
+            Si return_raw=True: Tuple (liste de tags, réponse brute)
         """
         # Utiliser le prompt configuré avec la langue spécifiée
         prompt = config.AUTO_PROMPT.format(language=config.TAG_LANGUAGE)
         
-        return self._generate_tags(image, model, prompt)
+        return self._generate_tags(image, model, prompt, return_raw=return_raw)
+    
+    def test_simple_description(self, image: Image.Image, model: str) -> tuple[List[str], str]:
+        """
+        Test simple pour vérifier si le modèle peut décrire l'image.
+        Utilisé pour diagnostiquer si le problème vient du modèle ou du format de réponse.
+        
+        Args:
+            image: Image PIL à analyser
+            model: Nom du modèle Ollama à utiliser
+            
+        Returns:
+            Tuple (tags extraits si possible, réponse brute complète)
+        """
+        simple_prompt = "Détaille cette photo en quelques mots."
+        
+        try:
+            tags, raw_response = self._generate_tags(image, model, simple_prompt, return_raw=True)
+            return tags, raw_response
+        except Exception as e:
+            return [], f"ERREUR: {str(e)}"
     
     def generate_tags_targeted(self, image: Image.Image, model: str, 
                               criteria: str, target_tag: str) -> Tuple[bool, Optional[str]]:
@@ -179,7 +201,7 @@ Ne donne aucune explication, juste OUI ou NON.
             logger.error(f"Erreur Ollama pour critère '{criteria}': {e}")
             return False, None
     
-    def _generate_tags(self, image: Image.Image, model: str, prompt: str) -> List[str]:
+    def _generate_tags(self, image: Image.Image, model: str, prompt: str, return_raw: bool = False):
         """
         Méthode interne pour générer des tags avec un prompt donné.
         Inclut une logique de retry en cas de timeout.
@@ -188,9 +210,11 @@ Ne donne aucune explication, juste OUI ou NON.
             image: Image PIL à analyser
             model: Nom du modèle Ollama
             prompt: Prompt à envoyer
+            return_raw: Si True, retourne aussi la réponse brute
             
         Returns:
-            Liste de tags
+            Si return_raw=False: Liste de tags
+            Si return_raw=True: Tuple (liste de tags, réponse brute)
         """
         for attempt in range(self.max_retries):
             try:
@@ -221,12 +245,17 @@ Ne donne aucune explication, juste OUI ou NON.
                 
                 if tags:
                     logger.info(f"Tags générés: {tags}")
+                    if return_raw:
+                        return tags, response_text
                     return tags
                 else:
                     logger.warning("Aucun tag extrait de la réponse")
                     if attempt < self.max_retries - 1:
                         logger.info("Nouvelle tentative...")
                         continue
+                    # Dernière tentative échouée - retourner réponse brute pour debug
+                    if return_raw:
+                        return [], response_text
                     return []
                 
             except requests.Timeout as e:
@@ -237,14 +266,20 @@ Ne donne aucune explication, juste OUI ou NON.
                     self.timeout = min(self.timeout + 60, 600)
                 else:
                     logger.error(f"Toutes les tentatives ont échoué pour ce prompt")
+                    if return_raw:
+                        return [], f"TIMEOUT après {self.max_retries} tentatives"
                     return []
             except requests.RequestException as e:
                 logger.error(f"Erreur lors de la génération de tags (tentative {attempt + 1}): {e}")
                 if attempt < self.max_retries - 1:
                     logger.info("Nouvelle tentative...")
                     continue
+                if return_raw:
+                    return [], f"ERREUR: {str(e)}"
                 return []
         
+        if return_raw:
+            return [], "Échec après toutes les tentatives"
         return []
     
     def _parse_tags(self, response_text: str) -> List[str]:

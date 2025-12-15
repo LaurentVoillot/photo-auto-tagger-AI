@@ -29,8 +29,8 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/laurentvoillot/photo-auto-tagger-AI.git
-cd photo-auto-tagger-AI
+git clone https://github.com/yourusername/photo-auto-tagger.git
+cd photo-auto-tagger
 
 # Install dependencies
 pip install -r requirements.txt
